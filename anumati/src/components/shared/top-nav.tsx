@@ -1,104 +1,48 @@
 "use client";
 
-/**
- * Top navigation bar.
- *
- * Reads the cookie-backed session via `getSession()` and shows the
- * signed-in user's name + role on the right. The Logout button clears
- * the session cookies and pushes back to `/`.
- *
- * Renders a placeholder until mounted to avoid hydration mismatches
- * (cookies are only readable on the client).
- */
-
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  Building2,
-  Crown,
-  GraduationCap,
-  LogOut,
-  UserCheck,
-  Workflow,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { LogOut } from "lucide-react";
 import { clearSession, getSession, type Session } from "@/lib/auth";
-import { cn } from "@/lib/utils";
 
-const ROLE_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
-  STUDENT: GraduationCap,
-  ADVISOR: UserCheck,
-  HOD: Building2,
-  PRINCIPAL: Crown,
+const ROLE_BADGE: Record<string, string> = {
+  STUDENT: "bg-info-light text-info",
+  ADVISOR: "bg-warning-light text-warning",
+  HOD: "bg-purple-100 text-purple-600",
+  PRINCIPAL: "bg-accent-light text-accent-hover",
+  ADMIN: "bg-danger-light text-danger",
 };
-
-function prettyRole(role: string): string {
-  if (role === "HOD") return "HOD";
-  return role.charAt(0) + role.slice(1).toLowerCase();
-}
 
 export function TopNav() {
   const router = useRouter();
   const [session, setSession] = useState<Session | null>(null);
   const [mounted, setMounted] = useState(false);
 
-  useEffect(() => {
-    setSession(getSession());
-    setMounted(true);
-  }, []);
+  useEffect(() => { setSession(getSession()); setMounted(true); }, []);
 
-  const handleLogout = () => {
-    clearSession();
-    router.push("/");
-    router.refresh();
-  };
-
-  const RoleIcon = session ? ROLE_ICON[session.role] ?? GraduationCap : null;
+  const handleLogout = () => { clearSession(); router.push("/"); router.refresh(); };
 
   return (
-    <header className="sticky top-0 z-30 w-full border-b border-zinc-200/70 bg-white/80 backdrop-blur-md dark:border-zinc-800/70 dark:bg-zinc-950/70">
-      <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
-        {/* Brand */}
-        <div className="flex items-center gap-2">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-linear-to-br from-blue-500 to-indigo-600 text-white shadow-sm">
-            <Workflow className="h-4 w-4" />
-          </span>
-          <span className="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-            Anumati
-          </span>
-        </div>
+    <header className="sticky top-0 z-30 w-full h-16 bg-surface border-b border-border">
+      <div className="mx-auto flex h-full max-w-7xl items-center justify-between px-6 md:px-10">
+        <span className="text-lg font-bold text-accent tracking-tight">Anumati</span>
 
-        {/* Session block — only after mount to avoid hydration mismatch. */}
         {mounted && session ? (
           <div className="flex items-center gap-3">
-            <div
-              className={cn(
-                "flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-sm",
-                "dark:border-zinc-800 dark:bg-zinc-900",
-              )}
-            >
-              {RoleIcon && <RoleIcon className="h-4 w-4 text-zinc-500" />}
-              <span className="font-medium text-zinc-900 dark:text-zinc-50">
-                {session.name}
-              </span>
-              <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                {prettyRole(session.role)}
+            <div className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent text-xs font-bold text-white">
+                {session.name.charAt(0).toUpperCase()}
+              </div>
+              <span className="hidden sm:inline text-sm font-medium text-text-primary">{session.name}</span>
+              <span className={`hidden sm:inline rounded-full px-2 py-0.5 text-[10px] font-semibold ${ROLE_BADGE[session.role] ?? ""}`}>
+                {session.role === "HOD" ? "HOD" : session.role.charAt(0) + session.role.slice(1).toLowerCase()}
               </span>
             </div>
-
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleLogout}
-              aria-label="Log out"
-            >
-              <LogOut className="h-4 w-4" />
-              Logout
-            </Button>
+            <button onClick={handleLogout} className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs text-text-secondary hover:text-danger hover:bg-danger-light transition-all duration-150 active:scale-95">
+              <LogOut className="h-3.5 w-3.5" /><span className="hidden sm:inline">Logout</span>
+            </button>
           </div>
-        ) : (
-          <div className="h-8 w-40" aria-hidden />
-        )}
+        ) : <div className="h-8 w-32" />}
       </div>
     </header>
   );

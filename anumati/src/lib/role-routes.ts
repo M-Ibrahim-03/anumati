@@ -10,4 +10,5 @@ export const ROLE_HOME: Record<Role, string> = {
   ADVISOR: "/advisor",
   HOD: "/hod",
   PRINCIPAL: "/principal",
+  ADMIN: "/admin",
 };

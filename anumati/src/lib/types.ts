@@ -10,12 +10,25 @@
 // Roles & users
 // ---------------------------------------------------------------------------
 
-export type Role = "STUDENT" | "ADVISOR" | "HOD" | "PRINCIPAL";
+export type Role = "STUDENT" | "ADVISOR" | "HOD" | "PRINCIPAL" | "ADMIN";
 
 export interface User {
   id: string;
   name: string;
   role: Role;
+}
+
+/**
+ * Matches the `faculty_users` table in Supabase.
+ * Used for faculty/admin directory lookups and role verification.
+ */
+export interface FacultyUser {
+  id: string;
+  name: string;
+  role: Role;
+  isVerified: boolean;
+  /** ISO 8601 timestamp. */
+  createdAt: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -50,6 +63,12 @@ export interface ApprovalEvent {
 }
 
 // ---------------------------------------------------------------------------
+// AI policy check result (populated by the AI moderation pipeline).
+// ---------------------------------------------------------------------------
+
+export type AiPolicyStatus = "APPROVED" | "WARNING" | "FLAGGED";
+
+// ---------------------------------------------------------------------------
 // Requests
 // ---------------------------------------------------------------------------
 
@@ -68,4 +87,18 @@ export interface Request {
   /** ISO 8601 timestamp string. Bumped on every transition. */
   updatedAt: string;
   history: ApprovalEvent[];
+
+  // --- AI moderation fields ------------------------------------------------
+
+  /** Result of the AI content-policy check on the request text. */
+  aiPolicyStatus?: AiPolicyStatus;
+  /** Human-readable reason from the AI policy checker. */
+  aiPolicyReason?: string;
+
+  // --- Document attachment --------------------------------------------------
+
+  /** Base64-encoded document (e.g. scanned leave certificate). */
+  documentBase64?: string;
+  /** Whether the AI OCR pipeline has verified the attached document. */
+  aiOcrVerified?: boolean;
 }

@@ -1,11 +1,20 @@
 -- ============================================================================
--- Anumati — requests table + RLS + realtime
+-- Anumati — God Level Schema (Requests + Faculty + AI + RLS + Realtime)
 --
 -- Run this in the Supabase SQL Editor (Dashboard → SQL Editor → New Query)
 -- or via the Supabase CLI: supabase db push
 -- ============================================================================
 
--- 1. Create the table.
+-- 1. Create the Faculty Users Table (For Admin Verification)
+create table if not exists public.faculty_users (
+  id            uuid default gen_random_uuid() primary key,
+  name          text not null,
+  role          text not null check (role in ('ADVISOR', 'HOD', 'PRINCIPAL', 'ADMIN')),
+  is_verified   boolean default false,
+  created_at    timestamptz not null default now()
+);
+
+-- 2. Create the requests table (with God Level AI Columns).
 create table if not exists public.requests (
   id            text primary key,
   student_id    text not null,
@@ -14,6 +23,13 @@ create table if not exists public.requests (
   title         text not null,
   description   text not null default '',
   ai_summary    text,
+
+  -- AI moderation columns
+  ai_policy_status text check (ai_policy_status in ('APPROVED', 'WARNING', 'FLAGGED')),
+  ai_policy_reason text,
+  document_base64  text,
+  ai_ocr_verified  boolean default false,
+
   status        text not null default 'PENDING_ADVISOR'
                   check (status in (
                     'DRAFT',
@@ -28,37 +44,35 @@ create table if not exists public.requests (
   history       jsonb not null default '[]'::jsonb
 );
 
--- 2. Index on status for the queue pages (filter by status).
+-- 3. Index on status for the queue pages (filter by status).
 create index if not exists idx_requests_status on public.requests (status);
 
--- 3. Index on student_name for the student dashboard (filter by name).
+-- 4. Index on student_name for the student dashboard (filter by name).
 create index if not exists idx_requests_student_name on public.requests (student_name);
 
--- 4. Enable Row Level Security.
+-- 5. Enable Row Level Security.
 alter table public.requests enable row level security;
+alter table public.faculty_users enable row level security;
 
--- 5. Permissive policies for the hackathon demo.
---    In production you'd scope these to authenticated users and their own rows.
-
--- Anyone can read all requests (needed for faculty queues + student tracking).
+-- 6. Permissive policies for the hackathon demo.
 create policy "Allow public read"
-  on public.requests
-  for select
-  using (true);
+  on public.requests for select using (true);
 
--- Anyone can insert (students submit new requests).
 create policy "Allow public insert"
-  on public.requests
-  for insert
-  with check (true);
+  on public.requests for insert with check (true);
 
--- Anyone can update (faculty approve/reject/forward).
 create policy "Allow public update"
-  on public.requests
-  for update
-  using (true)
-  with check (true);
+  on public.requests for update using (true) with check (true);
 
--- 6. Enable Supabase Realtime on this table.
---    This makes INSERT and UPDATE events flow to subscribed clients.
+create policy "Allow public read faculty"
+  on public.faculty_users for select using (true);
+
+create policy "Allow public insert faculty"
+  on public.faculty_users for insert with check (true);
+
+create policy "Allow public update faculty"
+  on public.faculty_users for update using (true) with check (true);
+
+-- 7. Enable Supabase Realtime on these tables.
 alter publication supabase_realtime add table public.requests;
+alter publication supabase_realtime add table public.faculty_users;

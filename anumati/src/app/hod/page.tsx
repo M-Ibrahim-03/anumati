@@ -10,9 +10,9 @@ export default function HodPage() {
       <TopNav />
       <FacultyQueue
         filterStatus="PENDING_HOD"
-        title="HOD queue"
-        description="Department-level review. Approve to forward to the Principal for final sign-off, or reject with feedback."
-        emptyTitle="Nothing pending department review"
+        title="HOD Review"
+        description="Department-level review. Approve to forward to the Principal for final sign-off."
+        emptyTitle="All caught up!"
         emptyDescription="Requests forwarded by Advisors will arrive here for your decision."
       />
     </ProtectedRoute>

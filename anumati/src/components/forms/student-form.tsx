@@ -1,381 +1,137 @@
 "use client";
 
-/**
- * Student request form (AI-assisted).
- *
- * Workflow:
- *   1. Student types a short, plain-language prompt into the "AI Magic"
- *      input ("Need 2 days for hackathon"). Clicking the ✨ button hits
- *      /api/ai/generate and fills the description with a formal letter.
- *   2. Student picks the request type, types a title, edits the
- *      description if they want to.
- *   3. On submit:
- *        - hit /api/ai/summarize to produce the AI TL;DR
- *        - build a fresh Request object
- *        - INSERT into Supabase `requests`
- *        - mirror into the local store via addRequest() so the right
- *          column updates instantly.
- */
-
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import {
-  Loader2,
-  Send,
-  Sparkles,
-  Wand2,
-} from "lucide-react";
+import { FileImage, Loader2, Send, Sparkles, Upload, Wand2, X } from "lucide-react";
 import { toast } from "sonner";
-
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { useAppStore } from "@/lib/store";
 import { generateLetterDetailed } from "@/lib/ai/generate";
 import { summarizeTextDetailed } from "@/lib/ai/summarize";
 import { getSession } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { requestToRow } from "@/lib/supabase-mappers";
-import type { ApprovalEvent, Request, RequestType } from "@/lib/types";
+import type { AiPolicyStatus, ApprovalEvent, Request, RequestType } from "@/lib/types";
 
-// ---------------------------------------------------------------------------
-// Form schema
-// ---------------------------------------------------------------------------
-
-const REQUEST_TYPES: { value: RequestType; label: string; placeholder: string }[] = [
-  {
-    value: "LEAVE",
-    label: "Leave application",
-    placeholder:
-      "Reason for leave, dates, any backup arrangements for missed classes…",
-  },
-  {
-    value: "EVENT",
-    label: "Event approval",
-    placeholder:
-      "Event name, expected participants, venue, budget, faculty coordinator…",
-  },
-  {
-    value: "PROJECT",
-    label: "Project approval",
-    placeholder:
-      "Project scope, mentor, resources required, timeline, deliverables…",
-  },
+const TYPES: { value: RequestType; label: string; ph: string }[] = [
+  { value: "LEAVE", label: "Leave", ph: "Reason, dates…" },
+  { value: "EVENT", label: "Event", ph: "Event name, budget…" },
+  { value: "PROJECT", label: "Project", ph: "Scope, mentor, timeline…" },
 ];
 
 const schema = z.object({
   type: z.enum(["LEAVE", "EVENT", "PROJECT"]),
-  title: z
-    .string()
-    .min(5, "Title should be at least 5 characters.")
-    .max(120, "Keep the title under 120 characters."),
-  description: z
-    .string()
-    .min(20, "Add a few more details so reviewers have context.")
-    .max(8000, "Description is too long."),
+  title: z.string().min(5).max(120),
+  description: z.string().min(20).max(8000),
 });
+type FV = z.infer<typeof schema>;
 
-type FormValues = z.infer<typeof schema>;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function newId(prefix: string): string {
-  const g = globalThis as { crypto?: { randomUUID?: () => string } };
-  if (g.crypto?.randomUUID) return `${prefix}_${g.crypto.randomUUID()}`;
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-}
-
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
+function newId(p: string) { const g = globalThis as { crypto?: { randomUUID?: () => string } }; return g.crypto?.randomUUID ? `${p}_${g.crypto.randomUUID()}` : `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`; }
+function toB64(f: File): Promise<string> { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result as string); r.onerror = () => rej(); r.readAsDataURL(f); }); }
 
 export function StudentForm() {
   const router = useRouter();
   const { addRequest } = useAppStore();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [sName, setSName] = useState<string | null>(null);
+  const [sId, setSId] = useState<string | null>(null);
+  const [prompt, setPrompt] = useState("");
+  const [gen, setGen] = useState(false);
+  const [sub, setSub] = useState(false);
+  const [phase, setPhase] = useState("");
+  const [doc, setDoc] = useState<string | null>(null);
+  const [docName, setDocName] = useState<string | null>(null);
 
-  const [studentName, setStudentName] = useState<string | null>(null);
-  const [studentId, setStudentId] = useState<string | null>(null);
-  const [aiPrompt, setAiPrompt] = useState("");
-  const [generating, setGenerating] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  const { register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm<FV>({ resolver: zodResolver(schema), defaultValues: { type: "LEAVE", title: "", description: "" } });
+  const selType = watch("type");
 
-  const {
-    register,
-    handleSubmit,
-    reset,
-    setValue,
-    watch,
-    formState: { errors },
-  } = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: { type: "LEAVE", title: "", description: "" },
-  });
+  useEffect(() => { const s = getSession(); if (!s || s.role !== "STUDENT") { router.replace("/"); return; } setSName(s.name); setSId(`student_${s.name.toLowerCase().replace(/\s+/g, "_")}`); }, [router]);
 
-  const selectedType = watch("type");
-  const placeholder =
-    REQUEST_TYPES.find((t) => t.value === selectedType)?.placeholder ?? "";
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => { const f = e.target.files?.[0]; if (!f) return; if (!f.type.startsWith("image/")) { toast.error("Image only."); return; } if (f.size > 10e6) { toast.error("Max 10MB."); return; } try { setDoc(await toB64(f)); setDocName(f.name); } catch { toast.error("Read failed."); } };
+  const rmDoc = () => { setDoc(null); setDocName(null); if (fileRef.current) fileRef.current.value = ""; };
 
-  // Resolve session on mount; redirect to login if not signed in as a student.
-  useEffect(() => {
-    const session = getSession();
-    if (!session) {
-      router.replace("/");
-      return;
-    }
-    if (session.role !== "STUDENT") {
-      toast.error("Sign in as a student to submit requests.");
-      router.replace("/");
-      return;
-    }
-    setStudentName(session.name);
-    // Stable per-name id so multiple submissions from the same student
-    // share a studentId without needing real auth.
-    setStudentId(`student_${session.name.toLowerCase().replace(/\s+/g, "_")}`);
-  }, [router]);
+  const doGen = async () => { if (!prompt.trim()) { toast.error("Type a prompt."); return; } setGen(true); const t = toast.loading("Drafting…"); try { const { letter } = await generateLetterDetailed(prompt.trim()); if (!letter) { toast.error("Failed.", { id: t }); return; } setValue("description", letter, { shouldValidate: true, shouldDirty: true }); toast.success("Draft ready", { id: t }); } finally { setGen(false); } };
 
-  // ---- AI Magic: prompt → letter → fill description ----------------------
-
-  const handleGenerate = async () => {
-    const prompt = aiPrompt.trim();
-    if (!prompt) {
-      toast.error("Type a short prompt first", {
-        description: 'Something like "Need 2 days for hackathon" works great.',
-      });
-      return;
-    }
-    setGenerating(true);
-    const tid = toast.loading("Drafting your letter…", {
-      description: "Asking the AI to expand your prompt.",
-    });
+  const onSubmit = async (v: FV) => {
+    if (!sName || !sId) return;
+    setSub(true); const t = toast.loading("🤖 Analyzing…");
     try {
-      const { letter, ai } = await generateLetterDetailed(prompt);
-      if (!letter) {
-        toast.error("Could not draft a letter", {
-          id: tid,
-          description: "Please try a different prompt or write it yourself.",
-        });
-        return;
-      }
-      setValue("description", letter, { shouldValidate: true, shouldDirty: true });
-      toast.success(ai ? "Draft ready" : "Draft ready (offline fallback)", {
-        id: tid,
-        description: "Edit it below before submitting.",
-      });
-    } finally {
-      setGenerating(false);
-    }
-  };
-
-  // ---- Submit: summarize → build → insert into Supabase → mirror ---------
-
-  const onSubmit = async (values: FormValues) => {
-    if (!studentName || !studentId) {
-      toast.error("You must be signed in as a student to submit.");
-      return;
-    }
-
-    setSubmitting(true);
-    const tid = toast.loading("Submitting request…", {
-      description: "Generating an AI summary for the reviewer.",
-    });
-
-    try {
-      const { summary } = await summarizeTextDetailed(values.description);
-      const now = new Date().toISOString();
-
-      const submittedEvent: ApprovalEvent = {
-        id: newId("evt"),
-        timestamp: now,
-        actorId: studentId,
-        actorRole: "STUDENT",
-        action: "SUBMITTED",
-      };
-
-      const request: Request = {
-        id: newId("req"),
-        studentId,
-        studentName,
-        type: values.type,
-        title: values.title.trim(),
-        description: values.description.trim(),
-        aiSummary: summary || undefined,
-        status: "PENDING_ADVISOR",
-        createdAt: now,
-        updatedAt: now,
-        history: [submittedEvent],
-      };
-
-      // Persist to Supabase so other devices see it via realtime.
-      const { error } = await supabase
-        .from("requests")
-        .insert(requestToRow(request));
-
-      if (error) throw error;
-
-      // Mirror locally so the right-hand list updates instantly.
-      addRequest(request);
-
-      toast.success("Request submitted", {
-        id: tid,
-        description: "Now with your Advisor for review.",
-      });
-
-      reset({ type: values.type, title: "", description: "" });
-      setAiPrompt("");
-    } catch (err) {
-      toast.error("Could not submit request", {
-        id: tid,
-        description:
-          err instanceof Error ? err.message : "Please try again in a moment.",
-      });
-    } finally {
-      setSubmitting(false);
-    }
+      setPhase("Summary…"); const { summary } = await summarizeTextDetailed(v.description);
+      setPhase("Policy audit…"); let ps: AiPolicyStatus | undefined; let pr: string | undefined;
+      try { const r = await fetch("/api/ai/audit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: v.title, type: v.type, description: v.description }) }); if (r.ok) { const d = await r.json() as { status?: string; reason?: string }; if (d.status) { ps = d.status as AiPolicyStatus; pr = d.reason; } } } catch {}
+      let ocr: boolean | undefined;
+      if (doc) { setPhase("OCR…"); try { const r = await fetch("/api/ai/ocr", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ image: doc, description: v.description }) }); if (r.ok) { const d = await r.json() as { verified?: boolean }; ocr = Boolean(d.verified); } } catch {} }
+      setPhase("Saving…"); const now = new Date().toISOString();
+      const evt: ApprovalEvent = { id: newId("evt"), timestamp: now, actorId: sId, actorRole: "STUDENT", action: "SUBMITTED" };
+      const req: Request = { id: newId("req"), studentId: sId, studentName: sName, type: v.type, title: v.title.trim(), description: v.description.trim(), aiSummary: summary || undefined, aiPolicyStatus: ps, aiPolicyReason: pr, documentBase64: doc ?? undefined, aiOcrVerified: ocr, status: "PENDING_ADVISOR", createdAt: now, updatedAt: now, history: [evt] };
+      const { error } = await supabase.from("requests").insert(requestToRow(req)); if (error) throw error;
+      addRequest(req); toast.success("Submitted!", { id: t, description: "Now with your Advisor." }); reset({ type: v.type, title: "", description: "" }); setPrompt(""); rmDoc();
+    } catch (e) { toast.error("Failed", { id: t, description: e instanceof Error ? e.message : "" }); } finally { setSub(false); setPhase(""); }
   };
 
   return (
-    <Card className="w-full">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Sparkles className="h-5 w-5 text-blue-500" />
-          New request
-        </CardTitle>
-        <CardDescription>
-          Describe what you need. Our AI helps you write a polished letter, and
-          your Advisor reviews it next.
-        </CardDescription>
-      </CardHeader>
+    <div className="bg-surface border border-border rounded-[20px] p-5 md:p-6 shadow-[var(--shadow-1)]">
+      <h2 className="text-base font-bold text-text-primary flex items-center gap-2 mb-1"><Sparkles className="h-4 w-4 text-accent" /> New Request</h2>
+      <p className="text-xs text-text-secondary mb-5">AI drafts your letter and audits compliance.</p>
 
-      <CardContent>
-        <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-5" noValidate>
-          {/* AI Magic prompt */}
-          <div className="rounded-lg border border-blue-200 bg-blue-50/60 p-3 dark:border-blue-900/50 dark:bg-blue-950/30">
-            <Label htmlFor="ai-prompt" className="flex items-center gap-1.5 text-blue-900 dark:text-blue-200">
-              <Wand2 className="h-4 w-4" />
-              AI Magic — describe it in one line
-            </Label>
-            <div className="mt-2 flex gap-2">
-              <Input
-                id="ai-prompt"
-                value={aiPrompt}
-                onChange={(e) => setAiPrompt(e.target.value)}
-                placeholder='e.g. "Need 2 days leave for a hackathon"'
-                disabled={generating || submitting}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void handleGenerate();
-                  }
-                }}
-              />
-              <Button
-                type="button"
-                variant="default"
-                onClick={handleGenerate}
-                disabled={generating || submitting || aiPrompt.trim().length === 0}
-                aria-label="Generate letter from prompt"
-              >
-                {generating ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Sparkles className="h-4 w-4" />
-                )}
-                <span className="hidden sm:inline">Draft with AI</span>
-              </Button>
-            </div>
-            <p className="mt-1.5 text-xs text-blue-900/70 dark:text-blue-200/70">
-              The AI will fill the description below. You can edit it freely
-              before submitting.
-            </p>
+      <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4" noValidate>
+        {/* AI Magic */}
+        <div className="rounded-xl bg-accent-light/50 border border-accent/20 p-4">
+          <label className="text-[10px] font-bold uppercase tracking-wide text-accent flex items-center gap-1 mb-2"><Wand2 className="h-3 w-3" /> AI Magic</label>
+          <div className="flex gap-2">
+            <input value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder='"Need 2 days for hackathon"' disabled={gen || sub} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void doGen(); } }} className="flex-1 h-10 rounded-xl border border-border bg-white px-3 text-sm placeholder:text-slate-400 focus:border-accent focus:ring-2 focus:ring-accent/20" />
+            <button type="button" onClick={doGen} disabled={gen || sub || !prompt.trim()} className="h-10 px-4 rounded-full bg-accent text-white text-sm font-semibold hover:bg-accent-hover active:scale-95 transition-all disabled:opacity-50 flex items-center gap-1.5">
+              {gen ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}<span className="hidden sm:inline">Draft</span>
+            </button>
           </div>
+        </div>
 
-          {/* Type */}
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="request-type">Request type</Label>
-            <NativeSelect
-              id="request-type"
-              disabled={submitting}
-              {...register("type")}
-            >
-              {REQUEST_TYPES.map((t) => (
-                <option key={t.value} value={t.value}>
-                  {t.label}
-                </option>
-              ))}
-            </NativeSelect>
-            {errors.type && (
-              <p className="text-sm text-red-600">{errors.type.message}</p>
-            )}
-          </div>
+        {/* Type */}
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-bold uppercase tracking-wide text-text-secondary">Type</label>
+          <select {...register("type")} disabled={sub} className="h-10 rounded-xl border border-border bg-white px-3 text-sm focus:border-accent focus:ring-2 focus:ring-accent/20 appearance-none">
+            {TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+          </select>
+        </div>
 
-          {/* Title */}
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="request-title">Title</Label>
-            <Input
-              id="request-title"
-              placeholder="e.g. 2-day leave for hackathon"
-              disabled={submitting}
-              aria-invalid={Boolean(errors.title)}
-              {...register("title")}
-            />
-            {errors.title && (
-              <p className="text-sm text-red-600">{errors.title.message}</p>
-            )}
-          </div>
+        {/* Title */}
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-bold uppercase tracking-wide text-text-secondary">Title</label>
+          <input {...register("title")} placeholder="e.g. 2-day leave for hackathon" disabled={sub} className="h-10 rounded-xl border border-border bg-white px-3 text-sm placeholder:text-slate-400 focus:border-accent focus:ring-2 focus:ring-accent/20" />
+          {errors.title && <p className="text-[11px] text-danger">{errors.title.message}</p>}
+        </div>
 
-          {/* Description */}
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="request-description">Description</Label>
-            <Textarea
-              id="request-description"
-              rows={9}
-              placeholder={placeholder}
-              disabled={submitting}
-              aria-invalid={Boolean(errors.description)}
-              {...register("description")}
-            />
-            {errors.description && (
-              <p className="text-sm text-red-600">
-                {errors.description.message}
-              </p>
-            )}
-            <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              An AI summary of this description is generated automatically on
-              submit, so reviewers can decide quickly.
-            </p>
-          </div>
+        {/* Description */}
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-bold uppercase tracking-wide text-text-secondary">Description</label>
+          <textarea {...register("description")} rows={6} placeholder={TYPES.find((t) => t.value === selType)?.ph} disabled={sub} className="rounded-xl border border-border bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:border-accent focus:ring-2 focus:ring-accent/20 resize-none" />
+          {errors.description && <p className="text-[11px] text-danger">{errors.description.message}</p>}
+        </div>
 
-          <div className="flex justify-end pt-1">
-            <Button type="submit" size="lg" disabled={submitting}>
-              {submitting ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Submitting…
-                </>
-              ) : (
-                <>
-                  <Send className="h-4 w-4" />
-                  Submit Request
-                </>
-              )}
-            </Button>
-          </div>
-        </form>
-      </CardContent>
-    </Card>
+        {/* Document */}
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-bold uppercase tracking-wide text-text-secondary flex items-center gap-1"><FileImage className="h-3 w-3" /> Document (optional)</label>
+          {docName ? (
+            <div className="flex items-center gap-2 rounded-xl border border-border bg-white px-3 py-2 text-sm"><FileImage className="h-4 w-4 text-slate-400" /><span className="flex-1 truncate text-text-secondary">{docName}</span><button type="button" onClick={rmDoc} className="text-slate-400 hover:text-danger"><X className="h-4 w-4" /></button></div>
+          ) : (
+            <label className="flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed border-border hover:border-accent/50 bg-white p-5 text-center transition-all">
+              <Upload className="h-5 w-5 text-slate-400" /><span className="text-xs text-text-secondary">Drop or click to upload</span>
+              <input ref={fileRef} type="file" accept="image/*" onChange={onFile} disabled={sub} className="hidden" />
+            </label>
+          )}
+        </div>
+
+        {/* Submit */}
+        <div className="flex flex-col items-end gap-2 pt-2">
+          {sub && phase && <p className="text-[11px] text-accent font-medium">🤖 {phase}</p>}
+          <button type="submit" disabled={sub} className="flex h-11 w-full sm:w-auto items-center justify-center gap-2 rounded-full bg-accent px-6 text-sm font-semibold text-white hover:bg-accent-hover active:scale-95 transition-all disabled:opacity-50">
+            {sub ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            {sub ? "Analyzing…" : "Submit Request"}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }

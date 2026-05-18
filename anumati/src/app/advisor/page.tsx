@@ -10,10 +10,10 @@ export default function AdvisorPage() {
       <TopNav />
       <FacultyQueue
         filterStatus="PENDING_ADVISOR"
-        title="Advisor queue"
+        title="Advisor Queue"
         description="First-level review. Approve simple requests directly, or forward complex ones to the HOD."
-        emptyTitle="No requests waiting on you"
-        emptyDescription="When students submit new requests, they'll show up here for your review."
+        emptyTitle="All caught up!"
+        emptyDescription="When students submit new requests, they'll appear here for your review."
       />
     </ProtectedRoute>
   );
