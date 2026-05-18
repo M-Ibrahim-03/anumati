@@ -262,6 +262,13 @@ function describeEvent(event: ApprovalEvent): {
         Icon: ArrowUpRight,
         dotClass: "bg-emerald-500",
       };
+    case "FORWARDED":
+      return {
+        actor: role,
+        verb: "approved and forwarded",
+        Icon: ArrowUpRight,
+        dotClass: "bg-emerald-500",
+      };
     case "REJECTED":
       return {
         actor: role,

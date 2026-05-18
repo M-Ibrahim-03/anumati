@@ -36,7 +36,8 @@ export type ApprovalAction =
   | "SUBMITTED"
   | "APPROVED"
   | "REJECTED"
-  | "ESCALATED";
+  | "ESCALATED"
+  | "FORWARDED";
 
 export interface ApprovalEvent {
   id: string;

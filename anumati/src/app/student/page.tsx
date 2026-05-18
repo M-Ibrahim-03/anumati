@@ -4,11 +4,17 @@
  * Student dashboard.
  *
  * Two-column layout:
- *   - Left: submission form
- *   - Right: a feed of this student's requests, each rendered as a Card
- *            with title, type badge, status badge, and the live stepper.
+ *   - Left:  <StudentForm /> — AI-assisted submission.
+ *   - Right: this student's own requests (filtered by name from the
+ *            cookie session), each rendered as a Card with type +
+ *            status badges, the optional AI summary, and a live
+ *            <ApprovalStepper /> showing where the request sits.
+ *
+ * Redirects to `/` if no session, or if signed in as a non-student role.
  */
 
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   CalendarDays,
   CheckCircle2,
@@ -20,16 +26,18 @@ import {
 } from "lucide-react";
 
 import { Badge, type BadgeProps } from "@/components/ui/badge";
-import { RelativeTime } from "@/components/ui/time-stamp";
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { StudentRequestForm } from "@/components/forms/student-request-form";
+import { TopNav } from "@/components/shared/top-nav";
+import { StudentForm } from "@/components/forms/student-form";
 import { ApprovalStepper } from "@/components/workflow/approval-stepper";
+import { RelativeTime } from "@/components/ui/time-stamp";
 import { useAppStore } from "@/lib/store";
+import { getSession } from "@/lib/auth";
 import type { Request, RequestType, Status } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
@@ -38,7 +46,11 @@ import type { Request, RequestType, Status } from "@/lib/types";
 
 const TYPE_META: Record<
   RequestType,
-  { label: string; Icon: React.ComponentType<{ className?: string }>; variant: BadgeProps["variant"] }
+  {
+    label: string;
+    Icon: React.ComponentType<{ className?: string }>;
+    variant: BadgeProps["variant"];
+  }
 > = {
   LEAVE: { label: "Leave", Icon: CalendarDays, variant: "info" },
   EVENT: { label: "Event", Icon: PartyPopper, variant: "warning" },
@@ -47,7 +59,11 @@ const TYPE_META: Record<
 
 const STATUS_META: Record<
   Status,
-  { label: string; Icon: React.ComponentType<{ className?: string }>; variant: BadgeProps["variant"] }
+  {
+    label: string;
+    Icon: React.ComponentType<{ className?: string }>;
+    variant: BadgeProps["variant"];
+  }
 > = {
   DRAFT: { label: "Draft", Icon: Clock, variant: "outline" },
   PENDING_ADVISOR: { label: "Pending Advisor", Icon: Clock, variant: "info" },
@@ -62,63 +78,100 @@ const STATUS_META: Record<
 // ---------------------------------------------------------------------------
 
 export default function StudentPage() {
-  const { currentUser, requests, hydrated } = useAppStore();
+  const router = useRouter();
+  const { requests, hydrated } = useAppStore();
+  const [studentName, setStudentName] = useState<string | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+
+  useEffect(() => {
+    const session = getSession();
+    if (!session) {
+      router.replace("/");
+      return;
+    }
+    if (session.role !== "STUDENT") {
+      router.replace("/");
+      return;
+    }
+    setStudentName(session.name);
+    setAuthChecked(true);
+  }, [router]);
 
   // Filter to this student's requests, newest first.
-  const myRequests = requests
-    .filter((r) => r.studentId === currentUser.id)
-    .slice()
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const myRequests = useMemo(() => {
+    if (!studentName) return [];
+    return requests
+      .filter((r) => r.studentName === studentName)
+      .slice()
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  }, [requests, studentName]);
+
+  if (!authChecked || !studentName) {
+    // Render the chrome but no content while we resolve the session,
+    // so the redirect to `/` doesn't flash a layout-shift.
+    return (
+      <>
+        <TopNav />
+        <main className="flex-1" aria-hidden />
+      </>
+    );
+  }
 
   return (
-    <main className="flex-1 w-full mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-      <header className="mb-8 flex flex-col gap-1">
-        <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Welcome, {currentUser.name.split(" ")[0]}
-        </h1>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Submit new approval requests on the left. Track progress on the right.
-        </p>
-      </header>
+    <>
+      <TopNav />
+      <main className="flex-1 w-full mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        <header className="mb-8 flex flex-col gap-1">
+          <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">
+            Welcome, {studentName.split(" ")[0]}
+          </h1>
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">
+            Submit new approval requests on the left. Track progress on the right.
+          </p>
+        </header>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* ---------- Left: submission form ---------- */}
-        <section aria-labelledby="submit-heading" className="lg:sticky lg:top-6 lg:self-start">
-          <h2 id="submit-heading" className="sr-only">
-            Submit a request
-          </h2>
-          <StudentRequestForm />
-        </section>
-
-        {/* ---------- Right: my requests feed ---------- */}
-        <section
-          aria-labelledby="my-requests-heading"
-          className="flex flex-col gap-4"
-        >
-          <div className="flex items-baseline justify-between">
-            <h2
-              id="my-requests-heading"
-              className="text-lg font-semibold text-zinc-900 dark:text-zinc-50"
-            >
-              My requests
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          {/* ---------- Left: submission form ---------- */}
+          <section
+            aria-labelledby="submit-heading"
+            className="lg:sticky lg:top-20 lg:self-start"
+          >
+            <h2 id="submit-heading" className="sr-only">
+              Submit a request
             </h2>
-            <span className="text-xs text-zinc-500 dark:text-zinc-400">
-              {hydrated ? `${myRequests.length} total` : "Loading…"}
-            </span>
-          </div>
+            <StudentForm />
+          </section>
 
-          {hydrated && myRequests.length === 0 ? (
-            <EmptyState />
-          ) : (
-            <div className="flex flex-col gap-4">
-              {myRequests.map((request) => (
-                <RequestCard key={request.id} request={request} />
-              ))}
+          {/* ---------- Right: my requests feed ---------- */}
+          <section
+            aria-labelledby="my-requests-heading"
+            className="flex flex-col gap-4"
+          >
+            <div className="flex items-baseline justify-between">
+              <h2
+                id="my-requests-heading"
+                className="text-lg font-semibold text-zinc-900 dark:text-zinc-50"
+              >
+                My requests
+              </h2>
+              <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                {hydrated ? `${myRequests.length} total` : "Loading…"}
+              </span>
             </div>
-          )}
-        </section>
-      </div>
-    </main>
+
+            {hydrated && myRequests.length === 0 ? (
+              <EmptyState />
+            ) : (
+              <div className="flex flex-col gap-4">
+                {myRequests.map((request) => (
+                  <RequestCard key={request.id} request={request} />
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      </main>
+    </>
   );
 }
 

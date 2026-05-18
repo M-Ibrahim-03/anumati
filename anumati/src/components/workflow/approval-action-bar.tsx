@@ -3,14 +3,21 @@
 /**
  * Approval action bar.
  *
- * Shown only when the current user's role matches the role expected by the
- * request's current status. Approve goes straight through; Reject opens a
- * dialog to require a comment. Both paths funnel through `transition()` and
- * persist via the store's `updateRequest`.
+ * Renders the role-aware action buttons for whichever request is currently
+ * sitting in the actor's queue. The button set depends on the role:
+ *
+ *   ADVISOR  : [Reject] [Forward to HOD] [Approve Final]
+ *   HOD      : [Reject] [Approve & Forward]
+ *   PRINCIPAL: [Reject] [Approve & Sign Off]
+ *
+ * Every action funnels through `transition()` for status math, persists
+ * the updated row to Supabase via `requests.update(...)`, then mirrors
+ * into the local store so the UI updates immediately (the realtime
+ * subscription will reconcile across other devices).
  */
 
 import { useState } from "react";
-import { CheckCircle2, XCircle } from "lucide-react";
+import { ArrowUpRight, CheckCircle2, Loader2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -24,8 +31,10 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { CardFooter } from "@/components/ui/card";
 import type { Request, Role, Status, User } from "@/lib/types";
-import { transition } from "@/lib/workflow";
+import { transition, type TransitionAction } from "@/lib/workflow";
 import { useAppStore } from "@/lib/store";
+import { supabase } from "@/lib/supabase";
+import { transitionToUpdate } from "@/lib/supabase-mappers";
 
 /** Maps the queue-status → role expected to act on it. Mirrors workflow.ts. */
 const EXPECTED_ROLE_FOR_STATUS: Partial<Record<Status, Role>> = {
@@ -41,74 +50,167 @@ export interface ApprovalActionBarProps {
 
 export function ApprovalActionBar({ request, currentUser }: ApprovalActionBarProps) {
   const { updateRequest } = useAppStore();
+
+  // Per-button busy state so we can show spinners on the exact action clicked.
+  const [busyAction, setBusyAction] = useState<TransitionAction | null>(null);
+
+  // Reject dialog state.
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectComment, setRejectComment] = useState("");
-  const [submitting, setSubmitting] = useState(false);
 
   const expectedRole = EXPECTED_ROLE_FOR_STATUS[request.status];
   if (!expectedRole || expectedRole !== currentUser.role) {
     return null;
   }
 
-  const isFinalApprover = request.status === "PENDING_PRINCIPAL";
+  const isAdvisor = currentUser.role === "ADVISOR";
+  const isFinalApprover = currentUser.role === "PRINCIPAL";
 
-  const handleApprove = () => {
+  /**
+   * Run a transition end-to-end:
+   * 1. Compute the next request via the state machine.
+   * 2. Persist via Supabase .update(...).
+   * 3. Mirror into the local store so the UI updates instantly.
+   */
+  const apply = async (
+    action: TransitionAction,
+    successTitle: string,
+    successDescription: string,
+    comment?: string,
+  ): Promise<boolean> => {
+    let next: Request;
     try {
-      const next = transition(request, "APPROVE", currentUser);
-      updateRequest(next);
-      toast.success(
-        isFinalApprover ? "Request approved" : "Approved and forwarded",
-        {
-          description: isFinalApprover
-            ? "Final sign-off recorded."
-            : `Now with the ${nextStageLabel(next.status)}.`,
-        },
-      );
+      next = transition(request, action, currentUser, comment);
     } catch (err) {
-      toast.error("Could not approve", {
+      toast.error("Action not allowed", {
         description: err instanceof Error ? err.message : "Unknown error.",
       });
+      return false;
+    }
+
+    setBusyAction(action);
+    try {
+      const { error } = await supabase
+        .from("requests")
+        .update(transitionToUpdate(next))
+        .eq("id", next.id);
+
+      if (error) throw error;
+
+      updateRequest(next);
+      toast.success(successTitle, { description: successDescription });
+      return true;
+    } catch (err) {
+      toast.error("Could not save to the database", {
+        description:
+          err instanceof Error ? err.message : "Please try again in a moment.",
+      });
+      return false;
+    } finally {
+      setBusyAction(null);
     }
   };
 
-  const handleReject = () => {
+  const handleApprove = () => {
+    if (isAdvisor) {
+      void apply(
+        "APPROVE",
+        "Request approved",
+        "Final approval recorded — the student has been notified.",
+      );
+      return;
+    }
+    if (isFinalApprover) {
+      void apply(
+        "APPROVE",
+        "Request approved",
+        "Final sign-off recorded.",
+      );
+      return;
+    }
+    // HOD: APPROVE escalates to Principal.
+    void apply(
+      "APPROVE",
+      "Approved and forwarded",
+      "Now with the Principal for final sign-off.",
+    );
+  };
+
+  const handleForward = () => {
+    void apply(
+      "FORWARD",
+      "Forwarded to HOD",
+      "The HOD will review next.",
+    );
+  };
+
+  const handleReject = async () => {
     const comment = rejectComment.trim();
     if (!comment) {
       toast.error("A comment is required to reject.");
       return;
     }
-    setSubmitting(true);
-    try {
-      const next = transition(request, "REJECT", currentUser, comment);
-      updateRequest(next);
-      toast.success("Request rejected", {
-        description: "The student has been notified.",
-      });
+    const ok = await apply(
+      "REJECT",
+      "Request rejected",
+      "The student has been notified.",
+      comment,
+    );
+    if (ok) {
       setRejectOpen(false);
       setRejectComment("");
-    } catch (err) {
-      toast.error("Could not reject", {
-        description: err instanceof Error ? err.message : "Unknown error.",
-      });
-    } finally {
-      setSubmitting(false);
     }
   };
 
+  // --- labels --------------------------------------------------------------
+
+  const approveLabel = isAdvisor
+    ? "Approve Final"
+    : isFinalApprover
+      ? "Approve & Sign Off"
+      : "Approve & Forward";
+
+  const anythingBusy = busyAction !== null;
+
   return (
     <>
-      <CardFooter className="flex justify-end gap-2 border-t border-zinc-100 pt-6 dark:border-zinc-800">
+      <CardFooter className="flex flex-wrap justify-end gap-2 border-t border-zinc-100 pt-6 dark:border-zinc-800">
         <Button
           variant="outline"
           className="border-red-200 text-red-700 hover:bg-red-50 dark:border-red-900/50 dark:text-red-400 dark:hover:bg-red-950/40"
           onClick={() => setRejectOpen(true)}
+          disabled={anythingBusy}
         >
           <XCircle className="h-4 w-4" />
           Reject…
         </Button>
-        <Button variant="success" onClick={handleApprove}>
-          <CheckCircle2 className="h-4 w-4" />
-          {isFinalApprover ? "Approve & Sign Off" : "Approve & Forward"}
+
+        {isAdvisor && (
+          <Button
+            onClick={handleForward}
+            disabled={anythingBusy}
+            className="bg-blue-600 text-white hover:bg-blue-700"
+          >
+            {busyAction === "FORWARD" ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <ArrowUpRight className="h-4 w-4" />
+            )}
+            Forward to HOD
+          </Button>
+        )}
+
+        <Button
+          variant="success"
+          onClick={handleApprove}
+          disabled={anythingBusy}
+        >
+          {busyAction === "APPROVE" ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <CheckCircle2 className="h-4 w-4" />
+          )}
+          {approveLabel}
         </Button>
       </CardFooter>
 
@@ -128,22 +230,29 @@ export function ApprovalActionBar({ request, currentUser }: ApprovalActionBarPro
             placeholder="Explain why this is being rejected…"
             rows={5}
             autoFocus
+            disabled={busyAction === "REJECT"}
           />
 
           <DialogFooter>
             <Button
               variant="ghost"
               onClick={() => setRejectOpen(false)}
-              disabled={submitting}
+              disabled={busyAction === "REJECT"}
             >
               Cancel
             </Button>
             <Button
               variant="destructive"
               onClick={handleReject}
-              disabled={submitting || rejectComment.trim().length === 0}
+              disabled={
+                busyAction === "REJECT" || rejectComment.trim().length === 0
+              }
             >
-              <XCircle className="h-4 w-4" />
+              {busyAction === "REJECT" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <XCircle className="h-4 w-4" />
+              )}
               Reject Request
             </Button>
           </DialogFooter>
@@ -151,15 +260,4 @@ export function ApprovalActionBar({ request, currentUser }: ApprovalActionBarPro
       </Dialog>
     </>
   );
-}
-
-function nextStageLabel(status: Status): string {
-  switch (status) {
-    case "PENDING_HOD":
-      return "Head of Department";
-    case "PENDING_PRINCIPAL":
-      return "Principal";
-    default:
-      return "next reviewer";
-  }
 }

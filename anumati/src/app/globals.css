@@ -1,8 +1,31 @@
 @import "tailwindcss";
 
+/*
+ * Lock the `dark:` variant to a `.dark` class anywhere in the ancestor
+ * tree. Because we never add that class, every `dark:` utility in the
+ * codebase becomes inert and the app stays light regardless of OS
+ * preference. Toggling later is one line: html.classList.toggle("dark").
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Light theme palette */
+  --background: #fafafa;          /* zinc-50 */
+  --surface: #ffffff;
+  --foreground: #18181b;          /* zinc-900 */
+  --muted-foreground: #52525b;    /* zinc-600 */
+  --border: #e4e4e7;              /* zinc-200 */
+
+  --brand: #2563eb;
+  --brand-foreground: #ffffff;
+  --success: #059669;
+  --warning: #d97706;
+  --danger:  #dc2626;
+  --ring:    #3b82f6;
+
+  /* Tell the browser this is a light page so native form controls,
+     scrollbars, and the empty space around the canvas all match. */
+  color-scheme: light;
 }
 
 @theme inline {
@@ -12,15 +35,48 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  background: var(--background);
+  color: var(--foreground);
+  color-scheme: light;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, -apple-system, "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
+
+  /* Subtle dual radial gradient adds depth to the flat zinc-50 surface. */
+  background-image:
+    radial-gradient(1200px 600px at 100% -10%, rgba(37, 99, 235, 0.06), transparent 60%),
+    radial-gradient(1000px 500px at -10% 110%, rgba(16, 185, 129, 0.05), transparent 60%);
+  background-attachment: fixed;
+}
+
+/* Brand-blue text selection. */
+::selection {
+  background: rgba(37, 99, 235, 0.2);
+  color: var(--foreground);
+}
+
+/* Light-mode scrollbars. */
+* {
+  scrollbar-color: #d4d4d8 transparent;
+  scrollbar-width: thin;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #a1a1aa;
+  background-clip: padding-box;
+  border: 2px solid transparent;
 }

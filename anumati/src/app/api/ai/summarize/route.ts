@@ -15,7 +15,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const PROMPT_PREFIX =
-  "Summarize this student request into a single, punchy 15-word sentence. " +
+  "Summarize this request into a single 15-word punchy sentence. " +
   "Output only the sentence, no preamble, no quotes, no markdown.\n\nRequest:\n";
 
 const FALLBACK_LENGTH = 140;
